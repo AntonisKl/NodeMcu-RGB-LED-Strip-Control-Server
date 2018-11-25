@@ -1,13 +1,26 @@
-/*
- *  This sketch demonstrates how to set up a simple HTTP-like server.
- *  The server will set a GPIO pin depending on the request
- *    http://server_ip/gpio/0 will set the GPIO2 low,
- *    http://server_ip/gpio/1 will set the GPIO2 high
- *  server_ip is the IP address of the ESP8266 module, will be 
- *  printed to Serial when the module is connected.
- */
-
 #include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
+#include <TaskScheduler.h>
+#include <TimeLib.h>
+
+#define TIME_HEADER  "T"   // Header tag for serial time sync message
+#define TIME_REQUEST  7    // ASCII bell character requests a time sync message 
+
+// NTP Servers:
+static const char ntpServerName[] = "us.pool.ntp.org";
+//static const char ntpServerName[] = "time.nist.gov";
+//static const char ntpServerName[] = "time-a.timefreq.bldrdoc.gov";
+//static const char ntpServerName[] = "time-b.timefreq.bldrdoc.gov";
+//static const char ntpServerName[] = "time-c.timefreq.bldrdoc.gov";
+
+const int timeZone = 2;     // EET
+//const int timeZone = -5;  // Eastern Standard Time (USA)
+//const int timeZone = -4;  // Eastern Daylight Time (USA)
+//const int timeZone = -8;  // Pacific Standard Time (USA)
+//const int timeZone = -7;  // Pacific Daylight Time (USA)
+
+WiFiUDP Udp;
+unsigned int localPort = 8888;  // local port to listen for UDP packets
 
 // RGB
 const int redPin = D0;
@@ -22,6 +35,107 @@ const char* spaceDel = " ", *umbersangDel = "&";
 char *rgbStrs[4];
 char requestMessage[20];
 char rgbValues[3];
+Scheduler runner;
+bool periodForTurningOnEnabled = false;
+
+// NTP code
+
+const int NTP_PACKET_SIZE = 48; // NTP time is in the first 48 bytes of message
+byte packetBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming & outgoing packets
+
+time_t getNtpTime()
+{
+  IPAddress ntpServerIP; // NTP server's ip address
+
+  while (Udp.parsePacket() > 0) ; // discard any previously received packets
+  Serial.println("Transmit NTP Request");
+  // get a random server from the pool
+  WiFi.hostByName(ntpServerName, ntpServerIP);
+  Serial.print(ntpServerName);
+  Serial.print(": ");
+  Serial.println(ntpServerIP);
+  sendNTPpacket(ntpServerIP);
+  uint32_t beginWait = millis();
+  while (millis() - beginWait < 1500) {
+    int size = Udp.parsePacket();
+    if (size >= NTP_PACKET_SIZE) {
+      Serial.println("Receive NTP Response");
+      Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
+      unsigned long secsSince1900;
+      // convert four bytes starting at location 40 to a long integer
+      secsSince1900 =  (unsigned long)packetBuffer[40] << 24;
+      secsSince1900 |= (unsigned long)packetBuffer[41] << 16;
+      secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
+      secsSince1900 |= (unsigned long)packetBuffer[43];
+      return secsSince1900 - 2208988800UL + timeZone * SECS_PER_HOUR;
+    }
+  }
+  Serial.println("No NTP Response :-(");
+  return 0; // return 0 if unable to get the time
+}
+
+// send an NTP request to the time server at the given address
+void sendNTPpacket(IPAddress &address)
+{
+  // set all bytes in the buffer to 0
+  memset(packetBuffer, 0, NTP_PACKET_SIZE);
+  // Initialize values needed to form NTP request
+  // (see URL above for details on the packets)
+  packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+  packetBuffer[1] = 0;     // Stratum, or type of clock
+  packetBuffer[2] = 6;     // Polling Interval
+  packetBuffer[3] = 0xEC;  // Peer Clock Precision
+  // 8 bytes of zero for Root Delay & Root Dispersion
+  packetBuffer[12] = 49;
+  packetBuffer[13] = 0x4E;
+  packetBuffer[14] = 49;
+  packetBuffer[15] = 52;
+  // all NTP fields have been given values, now
+  // you can send a packet requesting a timestamp:
+  Udp.beginPacket(address, 123); //NTP requests are to port 123
+  Udp.write(packetBuffer, NTP_PACKET_SIZE);
+  Udp.endPacket();
+}
+
+
+void writeToPins(char r, char g, char b) {
+  analogWrite(redPin, map(r, 0, 255, 0, 1023));
+  analogWrite(greenPin, map(g, 0, 255, 0, 1023));
+  analogWrite(bluePin, map(b, 0, 255, 0, 1023));
+}
+
+void getTimeAndTurnOnCallback();
+
+Task turnOnTask(10000, TASK_FOREVER, &getTimeAndTurnOnCallback, &runner, true);  //adding task to the chain on creation
+
+void getTimeAndTurnOnCallback() {
+//  time_t timeNow = now();
+//  Serial.print("Current time is: ");
+//  Serial.print(hour());
+//  Serial.print(" hours, ");
+//  Serial.print(minute());
+//  Serial.println(" minutes");
+
+  if (periodForTurningOnEnabled == true)
+  {
+    
+    writeToPins(255, 255, 255);
+
+    return;
+  }
+
+  unsigned int hourNow = hour();
+  unsigned int minuteNow = minute();
+
+  if (hourNow >= 9 && hourNow <= 12 &&  minute() >= 0) {
+    writeToPins(255, 255, 255);
+    turnOnTask.setInterval(86400000); // 24 hours
+    periodForTurningOnEnabled = true;
+  }
+
+  return;
+}
+
 
 void rainbow(unsigned int transitionSpeed)
 {
@@ -86,9 +200,26 @@ void setup() {
 
   // Print the IP address
   Serial.println(WiFi.localIP());
+
+//  setSyncProvider(requestSync);  //set function to call when sync required
+  Serial.println("Starting UDP");
+  Udp.begin(localPort);
+  Serial.print("Local port: ");
+  Serial.println(Udp.localPort());
+  Serial.println("waiting for sync");
+  setSyncProvider(getNtpTime);
+  setSyncInterval(300);
+
+  runner.startNow();  // set point-in-time for scheduling start
 }
 
 void loop() {
+//  if (Serial.available()) {
+//    processSyncMessage();
+//  }
+  
+  runner.execute();
+  
   // Check if a client has connected
   WiFiClient client = server.available();
 
@@ -96,6 +227,8 @@ void loop() {
   if (!client) {
     return;
   }
+
+//   runner.execute();
   
   // Wait until the client sends some data
   Serial.println("new client");
@@ -133,13 +266,8 @@ void loop() {
   Serial.print("blue:");
   Serial.println((int) rgbValues[2]);
   
-
-  analogWrite(redPin, map(rgbValues[0], 0, 255, 0, 1023));
-  analogWrite(greenPin, map(rgbValues[1], 0, 255, 0, 1023));
-  analogWrite(bluePin, map(rgbValues[2], 0, 255, 0, 1023));
-  
-  
-
+  writeToPins(rgbValues[0], rgbValues[1], rgbValues[2]);
+ 
 
   // Match the request
 //  int val;
