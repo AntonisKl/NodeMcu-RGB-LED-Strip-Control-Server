@@ -3,6 +3,9 @@
 
 #include "ntp.h"
 
+#define SET_COLOR_URI "/setColor"
+#define RAINBOW_URI "/rainbowEffect"
+
 // RGB
 const int redPin = D0;
 const int greenPin = D1;
@@ -12,12 +15,10 @@ const int bluePin = D2;
 const char *ssid = "Main";
 const char *password = "";
 
-const char *spaceDel = " ", *umbersangDel = "&";
-char *rgbStrs[4];
-char requestMessage[20];
-char rgbValues[3];
 Scheduler runner;
 bool periodForTurningOnEnabled = false;
+
+String lastRequest;
 
 // Create an instance of the server
 // specify the port to listen on as an argument
@@ -39,6 +40,7 @@ void setLEDColor(char r, char g, char b)
 
 void handleSetColor()
 {
+  lastRequest = SET_COLOR_URI;
   unsigned int serverArgsNum = server.args();
 
   Serial.println(serverArgsNum);
@@ -49,6 +51,22 @@ void handleSetColor()
   setLEDColor(server.arg(0).toInt(), server.arg(1).toInt(), server.arg(2).toInt());
 
   server.send(200, "text/plain", "Color set");
+}
+
+void handleRainbowEffect()
+{
+  lastRequest = RAINBOW_URI;
+  unsigned int serverArgsNum = server.args();
+
+  Serial.println(serverArgsNum);
+
+  if (serverArgsNum != 1)
+    return;
+
+  int transitionInterval = server.arg(0).toInt();
+  rainbow(transitionInterval);
+
+  server.send(200, "text/plain", "Rainbow effect ended");
 }
 
 void getTimeAndTurnOnCallback();
@@ -84,12 +102,10 @@ void getTimeAndTurnOnCallback()
   return;
 }
 
-void rainbow(unsigned int transitionSpeed)
+void rainbow(unsigned int transitionInterval)
 {
   // Start off with red.
-  rgbValues[0] = 255;
-  rgbValues[1] = 0;
-  rgbValues[2] = 0;
+  char rgbValues[3] = {255, 0, 0};
 
   // Choose the colours to increment and decrement.
   for (int decColour = 0; decColour < 3; decColour++)
@@ -97,25 +113,23 @@ void rainbow(unsigned int transitionSpeed)
     int incColour = decColour == 2 ? 0 : decColour + 1;
 
     // cross-fade the two colours.
-    for (int i = 0; i < 255; i += 1)
+    for (int i = 0; i < 255; i++)
     {
-      rgbValues[decColour] -= 1;
-      rgbValues[incColour] += 1;
+      server.handleClient();
+      if (lastRequest != RAINBOW_URI)
+        return;
 
-      analogWrite(redPin, map(rgbValues[0], 0, 255, 0, 1023));
-      analogWrite(greenPin, map(rgbValues[1], 0, 255, 0, 1023));
-      analogWrite(bluePin, map(rgbValues[2], 0, 255, 0, 1023));
-      delay(transitionSpeed);
+      rgbValues[decColour]--;
+      rgbValues[incColour]++;
+
+      setLEDColor(rgbValues[0], rgbValues[1], rgbValues[2]);
+      delay(transitionInterval);
     }
   }
 }
 
 void setup()
 {
-  rgbValues[0] = 0;
-  rgbValues[1] = 0;
-  rgbValues[2] = 0;
-
   Serial.begin(9600);
   delay(10);
 
@@ -157,7 +171,8 @@ void setup()
   setSyncProvider(getNtpTime);
   setSyncInterval(300);
 
-  server.on("/setColor", handleSetColor);
+  server.on(SET_COLOR_URI, handleSetColor);
+  server.on(RAINBOW_URI, handleRainbowEffect);
 
   server.begin();
   // runner.startNow();
