@@ -19,23 +19,63 @@ Scheduler runner;
 bool periodForTurningOnEnabled = false;
 
 String lastRequest;
+unsigned int colorTransitionSpeed = 5; // milliseconds
+
+char currentRGB[3] = {0, 0, 0};
 
 // Create an instance of the server
 // specify the port to listen on as an argument
 ESP8266WebServer server(80);
 
-void setLEDColor(char r, char g, char b)
+void writeRGB(char r, char g, char b)
 {
-  Serial.println("setting color");
-  Serial.print("r=");
-  Serial.print((int)r);
-  Serial.print("g=");
-  Serial.print((int)g);
-  Serial.print("b=");
-  Serial.println((int)b);
   analogWrite(redPin, map(r, 0, 255, 0, 1023));
   analogWrite(greenPin, map(g, 0, 255, 0, 1023));
   analogWrite(bluePin, map(b, 0, 255, 0, 1023));
+}
+
+char getOperandValue(char currentValue, char goalValue)
+{
+  if (currentValue > goalValue)
+    return -1;
+
+  if (currentValue < goalValue)
+    return 1;
+
+  return 0;
+}
+
+void setLEDColorSmooth(char r, char g, char b, unsigned int transitionSpeed)
+{
+  // Serial.println("setting color");
+  // Serial.print("r=");
+  // Serial.print((int)r);
+  // Serial.print("g=");
+  // Serial.print((int)g);
+  // Serial.print("b=");
+  // Serial.println((int)b);
+  if (transitionSpeed <= 0)
+  {
+    writeRGB(r, g, b);
+    return;
+  }
+
+  char operandR = getOperandValue(currentRGB[0], r);
+  char operandG = getOperandValue(currentRGB[1], g);
+  char operandB = getOperandValue(currentRGB[2], b);
+
+  while (currentRGB[0] != r || currentRGB[1] != g || currentRGB[2] != b)
+  {
+    if (currentRGB[0] != r)
+      currentRGB[0] += operandR;
+    if (currentRGB[1] != g)
+      currentRGB[1] += operandG;
+    if (currentRGB[2] != b)
+      currentRGB[2] += operandB;
+    
+    writeRGB(currentRGB[0], currentRGB[1], currentRGB[2]);
+    delay(transitionSpeed);
+  }
 }
 
 void handleSetColor()
@@ -48,7 +88,7 @@ void handleSetColor()
   if (serverArgsNum != 3)
     return;
 
-  setLEDColor(server.arg(0).toInt(), server.arg(1).toInt(), server.arg(2).toInt());
+  setLEDColorSmooth(server.arg(0).toInt(), server.arg(1).toInt(), server.arg(2).toInt(), colorTransitionSpeed);
 
   server.send(200, "text/plain", "Color set");
 }
@@ -84,7 +124,7 @@ void getTimeAndTurnOnCallback()
 
   if (periodForTurningOnEnabled == true)
   {
-    setLEDColor(255, 255, 255);
+    setLEDColorSmooth(255, 255, 255, colorTransitionSpeed);
 
     return;
   }
@@ -94,7 +134,7 @@ void getTimeAndTurnOnCallback()
 
   if (hourNow >= 9 && hourNow <= 12 && minute() >= 0)
   {
-    setLEDColor(255, 255, 255);
+    setLEDColorSmooth(255, 255, 255, colorTransitionSpeed);
     turnOnTask.setInterval(86400000); // 24 hours
     periodForTurningOnEnabled = true;
   }
@@ -122,7 +162,7 @@ void rainbow(unsigned int transitionInterval)
       rgbValues[decColour]--;
       rgbValues[incColour]++;
 
-      setLEDColor(rgbValues[0], rgbValues[1], rgbValues[2]);
+      writeRGB(rgbValues[0], rgbValues[1], rgbValues[2]);
       delay(transitionInterval);
     }
   }
