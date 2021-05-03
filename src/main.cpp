@@ -19,7 +19,7 @@ Scheduler runner;
 bool periodForTurningOnEnabled = false;
 
 String lastRequest;
-unsigned int colorTransitionSpeed = 5; // milliseconds
+unsigned int colorTransitionSpeed = 1; // milliseconds
 
 char currentRGB[3] = {0, 0, 0};
 
